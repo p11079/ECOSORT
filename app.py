@@ -98,22 +98,41 @@ def guess_from_name(name: str) -> tuple[str, int, str]:
             return category, None, "filename demo mode"
     return "Plastic", None, "demo fallback"
 
-def analyze_with_gemini(image_bytes: bytes) -> tuple[str, int, str] | None:
+def prepare_image(image_bytes: bytes) -> tuple[bytes, str]:
+    """Resize and compress uploads so API requests stay small and responsive."""
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    image.thumbnail((1024, 1024))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=78, optimize=True)
+    return output.getvalue(), "image/jpeg"
+
+def analyze_with_gemini(image_bytes: bytes, mime_type: str = "image/jpeg") -> tuple[str, int, str] | None:
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
         api_key = st.secrets.get("GEMINI_API_KEY", "")
         if not api_key:
             return None
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=15000,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
         prompt = "Classify this waste item into exactly one of Organic, Paper, Plastic, Glass, Metal, E-waste. Return JSON only with keys category, confidence, item."
-        response = model.generate_content([prompt, {"mime_type":"image/jpeg", "data":image_bytes}])
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=[prompt, types.Part.from_bytes(data=image_bytes, mime_type=mime_type)],
+            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0),
+        )
         data = json.loads(response.text.replace("```json", "").replace("```", "").strip())
         category = data.get("category", "Plastic")
         if category not in WASTE_RULES:
             category = "Plastic"
         return category, int(data.get("confidence", 80)), f"Gemini Vision: {data.get('item', 'item')}"
-    except Exception:
+    except Exception as exc:
+        st.session_state["gemini_error"] = str(exc).splitlines()[0][:220]
         return None
 
 st.sidebar.markdown("## EcoSort AI")
@@ -137,13 +156,24 @@ if page == "Sort an item":
         category_options = ["Select category…"] + list(WASTE_RULES)
         fallback_category = st.selectbox("Demo category", category_options, index=0, help="Used when no image or Gemini API key is configured.")
         use_ai = st.checkbox("Use AI image analysis", value=True)
+        try:
+            gemini_configured = bool(st.secrets.get("GEMINI_API_KEY", ""))
+        except Exception:
+            gemini_configured = False
+        if use_ai and not gemini_configured:
+            st.info("Gemini is not configured, so the app will use demo mode without AI confidence.")
         analyze = st.button("Analyze item →", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
         if analyze:
             if uploaded:
-                result = analyze_with_gemini(uploaded.getvalue()) if use_ai else None
+                st.session_state.pop("gemini_error", None)
+                with st.spinner("Analyzing image..."):
+                    compact_image, compact_type = prepare_image(uploaded.getvalue())
+                    result = analyze_with_gemini(compact_image, compact_type) if use_ai else None
                 category, confidence, method = result or guess_from_name(uploaded.name)
                 item = uploaded.name.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ')
+                if use_ai and result is None and st.session_state.get("gemini_error"):
+                    st.warning("Gemini could not analyze this image, so the app used demo mode. Error: " + st.session_state["gemini_error"])
             elif fallback_category == "Select category…":
                 st.warning("Upload an image or select a waste category before analyzing.")
                 st.stop()
