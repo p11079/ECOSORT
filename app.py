@@ -149,7 +149,7 @@ if page == "Sort an item":
                 st.stop()
             else:
                 category, confidence, method, item = fallback_category, 100, "manual demo mode", fallback_category
-        st.session_state["result"] = {"category":category, "confidence":confidence, "method":method, "item":item}
+            st.session_state["result"] = {"category":category, "confidence":confidence, "method":method, "item":item}
             save_result(item, category, confidence, method)
     if "result" in st.session_state:
         result = st.session_state["result"]
