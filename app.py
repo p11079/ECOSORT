@@ -84,7 +84,7 @@ def load_history() -> pd.DataFrame:
         return pd.read_csv(HISTORY_FILE)
     return pd.DataFrame(columns=["time", "item", "category", "confidence", "method"])
 
-def save_result(item: str, category: str, confidence: int, method: str) -> None:
+def save_result(item: str, category: str, confidence: int | None, method: str) -> None:
     row = pd.DataFrame([{"time": datetime.now().isoformat(timespec="seconds"), "item": item, "category": category, "confidence": confidence, "method": method}])
     history = pd.concat([load_history(), row], ignore_index=True)
     history.to_csv(HISTORY_FILE, index=False)
@@ -95,8 +95,8 @@ def guess_from_name(name: str) -> tuple[str, int, str]:
     keywords = {"E-waste":["battery","charger","phone","electronic","laptop"], "Organic":["food","banana","leaf","fruit","apple"], "Paper":["paper","card","book","newspaper"], "Glass":["glass","jar"], "Metal":["metal","can","tin","foil"], "Plastic":["plastic","bottle","wrapper","bag"]}
     for category, terms in keywords.items():
         if any(term in value for term in terms):
-            return category, 78, "filename demo mode"
-    return "Plastic", 54, "demo fallback"
+            return category, None, "filename demo mode"
+    return "Plastic", None, "demo fallback"
 
 def analyze_with_gemini(image_bytes: bytes) -> tuple[str, int, str] | None:
     try:
@@ -134,7 +134,8 @@ if page == "Sort an item":
         st.markdown('</div>', unsafe_allow_html=True)
     with right:
         st.markdown('<div class="card"><div class="label">Step 02 / Confirm context</div>', unsafe_allow_html=True)
-        fallback_category = st.selectbox("Demo category", list(WASTE_RULES), help="Used when no Gemini API key is configured.")
+        category_options = ["Select category…"] + list(WASTE_RULES)
+        fallback_category = st.selectbox("Demo category", category_options, index=0, help="Used when no image or Gemini API key is configured.")
         use_ai = st.checkbox("Use AI image analysis", value=True)
         analyze = st.button("Analyze item →", type="primary", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -143,16 +144,21 @@ if page == "Sort an item":
                 result = analyze_with_gemini(uploaded.getvalue()) if use_ai else None
                 category, confidence, method = result or guess_from_name(uploaded.name)
                 item = uploaded.name.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ')
+            elif fallback_category == "Select category…":
+                st.warning("Upload an image or select a waste category before analyzing.")
+                st.stop()
             else:
                 category, confidence, method, item = fallback_category, 100, "manual demo mode", fallback_category
-            st.session_state["result"] = {"category":category, "confidence":confidence, "method":method, "item":item}
+        st.session_state["result"] = {"category":category, "confidence":confidence, "method":method, "item":item}
             save_result(item, category, confidence, method)
     if "result" in st.session_state:
         result = st.session_state["result"]
         category = result["category"]
         rule = WASTE_RULES[category]
         st.markdown("### Result")
-        st.markdown(f'<div class="result" style="border-color:{rule["color"]}"><div class="label">Recommended category</div><h2>{category}</h2><p>{rule["advice"]}</p><div class="small">Confidence: {result["confidence"]}% · {result["method"]}</div></div>', unsafe_allow_html=True)
+        confidence = result["confidence"]
+        confidence_text = f"Confidence: {confidence}%" if confidence is not None else "Demo mode · confidence not measured"
+        st.markdown(f'<div class="result" style="border-color:{rule["color"]}"><div class="label">Recommended category</div><h2>{category}</h2><p>{rule["advice"]}</p><div class="small">{confidence_text} · {result["method"]}</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="tip"><b>Why this matters:</b> Correct sorting keeps useful materials in circulation and reduces contamination at collection and recycling points.</div>', unsafe_allow_html=True)
 
 elif page == "Impact dashboard":
